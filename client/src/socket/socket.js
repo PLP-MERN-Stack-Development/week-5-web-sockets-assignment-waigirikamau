@@ -1,149 +1,157 @@
-// socket.js - Socket.io client setup
-
+// socket.js - Enhanced Socket.io client setup
 import { io } from 'socket.io-client';
 import { useEffect, useState } from 'react';
 
-// Socket.io connection URL
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
 
-// Create socket instance
 export const socket = io(SOCKET_URL, {
   autoConnect: false,
   reconnection: true,
   reconnectionAttempts: 5,
   reconnectionDelay: 1000,
+  withCredentials: true
 });
 
-// Custom hook for using socket.io
 export const useSocket = () => {
   const [isConnected, setIsConnected] = useState(socket.connected);
-  const [lastMessage, setLastMessage] = useState(null);
   const [messages, setMessages] = useState([]);
   const [users, setUsers] = useState([]);
   const [typingUsers, setTypingUsers] = useState([]);
+  const [availableRooms, setAvailableRooms] = useState(['general', 'random']);
+  const [roomMembers, setRoomMembers] = useState([]);
 
-  // Connect to socket server
+  // Connection management
   const connect = (username) => {
     socket.connect();
-    if (username) {
-      socket.emit('user_join', username);
-    }
+    socket.emit('user_join', username, (response) => {
+      if (response.success) {
+        setAvailableRooms(response.rooms || ['general', 'random']);
+      }
+    });
   };
 
-  // Disconnect from socket server
   const disconnect = () => {
     socket.disconnect();
   };
 
-  // Send a message
+  // Room management
+  const joinRoom = (room, username) => {
+    socket.emit('join_room', { room, username }, (response) => {
+      if (response.success) {
+        setRoomMembers(response.members);
+        setMessages(response.messages);
+      }
+    });
+  };
+
+  const leaveRoom = (room, username) => {
+    socket.emit('leave_room', { room, username });
+  };
+
+  // Message handling
   const sendMessage = (message) => {
-    socket.emit('send_message', { message });
+    socket.emit('send_message', { text: message }, (response) => {
+      if (!response.success) {
+        console.error('Message failed:', response.error);
+      }
+    });
   };
 
-  // Send a private message
   const sendPrivateMessage = (to, message) => {
-    socket.emit('private_message', { to, message });
+    socket.emit('private_message', { to, text: message }, (response) => {
+      if (!response.success) {
+        console.error('Private message failed:', response.error);
+      }
+    });
   };
 
-  // Set typing status
-  const setTyping = (isTyping) => {
-    socket.emit('typing', isTyping);
+  // File handling
+  const sendFile = (fileData, room) => {
+    socket.emit('send_file', { 
+      ...fileData,
+      room
+    }, (response) => {
+      if (!response.success) {
+        console.error('File upload failed:', response.error);
+      }
+    });
   };
 
-  // Socket event listeners
+  // Typing indicators
+  const setTyping = ({ isTyping, room }) => {
+    socket.emit('typing', { isTyping, room });
+  };
+
+  // Event listeners
   useEffect(() => {
-    // Connection events
-    const onConnect = () => {
-      setIsConnected(true);
+    const onConnect = () => setIsConnected(true);
+    const onDisconnect = () => setIsConnected(false);
+
+    const onMessage = (message) => {
+      setMessages(prev => [...prev, message]);
     };
 
-    const onDisconnect = () => {
-      setIsConnected(false);
-    };
-
-    // Message events
-    const onReceiveMessage = (message) => {
-      setLastMessage(message);
-      setMessages((prev) => [...prev, message]);
-    };
-
-    const onPrivateMessage = (message) => {
-      setLastMessage(message);
-      setMessages((prev) => [...prev, message]);
-    };
-
-    // User events
-    const onUserList = (userList) => {
+    const onUserUpdate = (userList) => {
       setUsers(userList);
     };
 
-    const onUserJoined = (user) => {
-      // You could add a system message here
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          system: true,
-          message: `${user.username} joined the chat`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+    const onRoomUpdate = (data) => {
+      if (data.type === 'join' || data.type === 'leave') {
+        setRoomMembers(data.members);
+      }
     };
 
-    const onUserLeft = (user) => {
-      // You could add a system message here
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          system: true,
-          message: `${user.username} left the chat`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
-    };
-
-    // Typing events
-    const onTypingUsers = (users) => {
+    const onTypingUpdate = (users) => {
       setTypingUsers(users);
     };
 
-    // Register event listeners
+    const onNewRoom = (room) => {
+      setAvailableRooms(prev => [...prev, room]);
+    };
+
+    // Register all listeners
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
-    socket.on('receive_message', onReceiveMessage);
-    socket.on('private_message', onPrivateMessage);
-    socket.on('user_list', onUserList);
-    socket.on('user_joined', onUserJoined);
-    socket.on('user_left', onUserLeft);
-    socket.on('typing_users', onTypingUsers);
+    socket.on('receive_message', onMessage);
+    socket.on('private_message', onMessage);
+    socket.on('user_list', onUserUpdate);
+    socket.on('user_joined', onUserUpdate);
+    socket.on('user_left', onUserUpdate);
+    socket.on('room_update', onRoomUpdate);
+    socket.on('typing_users', onTypingUpdate);
+    socket.on('new_room', onNewRoom);
 
-    // Clean up event listeners
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
-      socket.off('receive_message', onReceiveMessage);
-      socket.off('private_message', onPrivateMessage);
-      socket.off('user_list', onUserList);
-      socket.off('user_joined', onUserJoined);
-      socket.off('user_left', onUserLeft);
-      socket.off('typing_users', onTypingUsers);
+      socket.off('receive_message', onMessage);
+      socket.off('private_message', onMessage);
+      socket.off('user_list', onUserUpdate);
+      socket.off('user_joined', onUserUpdate);
+      socket.off('user_left', onUserUpdate);
+      socket.off('room_update', onRoomUpdate);
+      socket.off('typing_users', onTypingUpdate);
+      socket.off('new_room', onNewRoom);
     };
   }, []);
 
   return {
     socket,
     isConnected,
-    lastMessage,
     messages,
     users,
     typingUsers,
+    availableRooms,
+    roomMembers,
     connect,
     disconnect,
+    joinRoom,
+    leaveRoom,
     sendMessage,
     sendPrivateMessage,
-    setTyping,
+    sendFile,
+    setTyping
   };
 };
 
-export default socket; 
+export default socket;
